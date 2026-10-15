@@ -1,6 +1,25 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
+<script>
+// Prevent TypeError: Cannot set property fetch of #<Window> which has only a getter
+// This occurs in some iframe/sandbox environments when third-party or platform scripts try to override/wrap window.fetch
+try {
+  let currentFetch = window.fetch;
+  Object.defineProperty(window, 'fetch', {
+    configurable: true,
+    enumerable: true,
+    get() {
+      return currentFetch;
+    },
+    set(val) {
+      currentFetch = val;
+    }
+  });
+} catch (e) {
+  console.warn('Could not make window.fetch writable:', e);
+}
+</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#4F7CFF">
@@ -15,6 +34,9 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
@@ -174,9 +196,66 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px;line
 @media(max-width:480px){
   .g3{grid-template-columns:1fr}.g2{grid-template-columns:1fr}
 }
+
+/* AUTH */
+.auth-ov{position:fixed;inset:0;z-index:2000;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px;overflow-y:auto}
+.auth-ov.hidden{display:none}
+.auth-card{width:100%;max-width:380px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-xl);padding:28px 24px;box-shadow:var(--shadow-md)}
+.auth-brand{display:flex;align-items:center;gap:10px;margin-bottom:22px}
+.auth-title{font-size:18px;font-weight:600;letter-spacing:-.3px;margin-bottom:4px}
+.auth-sub{font-size:13px;color:var(--text2);margin-bottom:18px}
+.auth-tabs{display:flex;gap:2px;background:var(--surface2);padding:3px;border-radius:9px;margin-bottom:18px}
+.auth-tab{flex:1;text-align:center;padding:7px;border-radius:7px;font-size:13px;font-weight:500;color:var(--text2);cursor:pointer;user-select:none}
+.auth-tab.active{background:var(--surface);color:var(--text);box-shadow:var(--shadow)}
+.auth-err{display:none;background:var(--red-bg);color:var(--red);border:1px solid var(--red-soft);border-radius:8px;padding:9px 12px;font-size:12.5px;margin-bottom:14px}
+.auth-err.show{display:block}
+.auth-link{font-size:12.5px;color:var(--accent);cursor:pointer;text-align:center;margin-top:14px}
+.auth-loading{text-align:center;color:var(--text2);font-size:13px}
+.auth-loading i{font-size:22px;color:var(--accent);margin-bottom:10px;display:block}
+.pw-wrap{position:relative}
+.pw-wrap .fi{padding-right:40px}
+.pw-eye{position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--text3);cursor:pointer;padding:4px}
 </style>
 </head>
 <body>
+<div class="auth-ov" id="authOv">
+  <div class="auth-card">
+    <div class="auth-brand">
+      <div class="logo-mark">Rp</div>
+      <div><div class="logo-text">Budget Tracker</div><div class="logo-sub">Personal Finance</div></div>
+    </div>
+
+    <div id="authLoading" class="auth-loading"><i class="fas fa-spinner fa-spin"></i><span id="authLoadingText">Memeriksa sesi...</span></div>
+
+    <div id="authBox" style="display:none">
+      <div class="auth-title" id="authTitle">Masuk ke akunmu</div>
+      <div class="auth-sub" id="authSubtitle">Data tersimpan di cloud dan tersinkron di semua perangkat.</div>
+      <div class="auth-tabs">
+        <div class="auth-tab active" id="tabLogin" onclick="setAuthMode('login')">Masuk</div>
+        <div class="auth-tab" id="tabRegister" onclick="setAuthMode('register')">Daftar</div>
+      </div>
+      <div class="auth-err" id="authErr"></div>
+      <div class="fg">
+        <label class="fl" for="authEmail">Email</label>
+        <input class="fi" id="authEmail" type="email" inputmode="email" autocomplete="email" placeholder="nama@email.com">
+      </div>
+      <div class="fg">
+        <label class="fl" for="authPass">Kata sandi</label>
+        <div class="pw-wrap">
+          <input class="fi" id="authPass" type="password" autocomplete="current-password" placeholder="Minimal 6 karakter">
+          <i class="fas fa-eye pw-eye" id="pwEye" onclick="togglePw()"></i>
+        </div>
+      </div>
+      <div class="fg" id="authPass2Wrap" style="display:none">
+        <label class="fl" for="authPass2">Ulangi kata sandi</label>
+        <input class="fi" id="authPass2" type="password" autocomplete="new-password" placeholder="Ketik ulang kata sandi">
+      </div>
+      <button class="btn btn-primary btn-full" id="authSubmit" onclick="submitAuth()">Masuk</button>
+      <div class="auth-link" id="authForgot" onclick="resetPassword()">Lupa kata sandi?</div>
+    </div>
+  </div>
+</div>
+
 <div class="app">
 
 <aside class="sidebar" id="sidebar">
@@ -190,6 +269,7 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px;line
   <div class="nav-item" id="nav-expense" onclick="navigate('expense')"><i class="fas fa-arrow-up"></i> Pengeluaran</div>
   <div class="nav-item" id="nav-budget" onclick="navigate('budget')"><i class="fas fa-sliders"></i> Budget Planner <span class="nav-badge" id="overBadge" style="display:none">!</span></div>
   <div class="nav-section">Insight</div>
+  <div class="nav-item" id="nav-ai" onclick="navigate('ai')"><i class="fas fa-robot"></i> Asisten AI <span class="badge b-blue" style="font-size: 9px; padding: 1px 4px; border-radius: 4px; margin-left: auto;">New</span></div>
   <div class="nav-item" id="nav-goals" onclick="navigate('goals')"><i class="fas fa-bullseye"></i> Saving Goals</div>
   <div class="nav-item" id="nav-analytics" onclick="navigate('analytics')"><i class="fas fa-chart-line"></i> Analytics</div>
   <div class="nav-section">Data</div>
@@ -198,6 +278,10 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px;line
     <div class="month-sel">
       <span id="sideMonthLabel">Mei 2025</span>
       <i class="fas fa-chevron-down" style="font-size:10px;color:var(--text3)"></i>
+    </div>
+    <div style="margin-top:10px;display:flex;align-items:center;gap:8px">
+      <div id="userEmail" style="flex:1;min-width:0;font-size:12px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
+      <button class="xbtn" title="Keluar" onclick="logout()"><i class="fas fa-right-from-bracket"></i></button>
     </div>
   </div>
 </aside>
@@ -394,6 +478,94 @@ body{background:var(--bg);color:var(--text);min-height:100vh;font-size:14px;line
       </div>
     </div>
 
+    <!-- ASISTEN AI -->
+    <div class="page" id="page-ai">
+      <div class="insight">
+        <div style="font-size:18px">🤖</div>
+        <div class="insight-txt">
+          <strong>Asisten AI Budget Tracker</strong> siap membantumu! Ketik kalimat alami atau <strong>foto struk belanja</strong> kamu untuk otomatis mencatat transaksi secara instan tanpa perlu repot mengisi form.
+        </div>
+      </div>
+
+      <div class="g2" style="margin-bottom:16px">
+        <!-- Text Parsing Card -->
+        <div class="card">
+          <div class="sec-hd"><div class="sec-title">✍️ Catat Lewat Chat</div></div>
+          <p style="font-size:13px;color:var(--text2);margin-bottom:14px">Masukkan kalimat pembelanjaan/pemasukan kamu. Contoh: "kemarin makan nasi goreng 25rb" atau "dapat bonus freelance 1 juta".</p>
+          <div class="fg">
+            <textarea class="fi" id="aiTextInput" rows="4" placeholder="Ketik di sini (misal: 'Beli bensin motor 30 ribu pagi ini' atau 'Gaji masuk sebesar 5000000')..." style="resize:none;font-size:13.5px"></textarea>
+          </div>
+          <button class="btn btn-primary btn-full" id="aiTextBtn" onclick="processAIText()"><i class="fas fa-paper-plane"></i> Proses dengan AI</button>
+        </div>
+
+        <!-- Receipt Scanning Card -->
+        <div class="card">
+          <div class="sec-hd"><div class="sec-title">📷 Foto / Unggah Struk Belanja</div></div>
+          <p style="font-size:13px;color:var(--text2);margin-bottom:14px">Punya struk fisik dari supermarket atau resto? Ambil foto struk menggunakan kamera atau unggah gambar untuk diekstrak otomatis.</p>
+          
+          <div style="display:flex;flex-direction:column;align-items:center;gap:12px;padding:16px;border:2px dashed var(--border);border-radius:var(--r);background:var(--bg);margin-bottom:14px" id="aiDropZone">
+            <i class="fas fa-camera" style="font-size:32px;color:var(--text3)" id="aiScanIcon"></i>
+            <div style="text-align:center">
+              <span id="aiScanText" style="font-size:13px;font-weight:500;color:var(--text2)">Ambil foto struk atau klik tombol di bawah</span>
+            </div>
+            <div style="display:flex;gap:8px">
+              <label class="btn btn-ghost" style="cursor:pointer;font-size:12px">
+                <i class="fas fa-image"></i> Pilih Foto Struk
+                <input type="file" id="aiImgFile" accept="image/*" onchange="processImageFile(event)" style="display:none">
+              </label>
+              <button class="btn btn-ghost" style="font-size:12px" onclick="startCamera()"><i class="fas fa-camera"></i> Gunakan Kamera</button>
+            </div>
+            <!-- Canvas/Video for camera capture -->
+            <div id="cameraContainer" style="display:none;width:100%;margin-top:10px">
+              <video id="cameraVideo" autoplay playsinline style="width:100%;max-height:220px;border-radius:8px;background:#000;object-fit:cover"></video>
+              <div style="display:flex;gap:6px;margin-top:8px;justify-content:center">
+                <button class="btn btn-green" style="font-size:12px" onclick="captureCamera()"><i class="fas fa-camera"></i> Jepret Foto</button>
+                <button class="btn btn-ghost" style="font-size:12px" onclick="stopCamera()"><i class="fas fa-times"></i> Tutup</button>
+              </div>
+            </div>
+            <!-- Image Preview -->
+            <div id="receiptPreviewContainer" style="display:none;width:100%;margin-top:10px;text-align:center">
+              <img id="receiptPreview" style="max-height:180px;max-width:100%;border-radius:8px;border:1px solid var(--border)">
+              <div style="margin-top:8px;display:flex;justify-content:center;gap:8px">
+                <button class="btn btn-primary" style="font-size:12px" id="aiScanBtn" onclick="processAIReceipt()"><i class="fas fa-wand-magic-sparkles"></i> Analisis Struk ini</button>
+                <button class="btn btn-red" style="font-size:12px" onclick="resetReceiptImage()"><i class="fas fa-trash"></i> Hapus</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Confirmation / Edit Card -->
+      <div class="card" id="aiResultCard" style="display:none;border-color:var(--accent-soft);background:var(--accent-bg)">
+        <div class="sec-hd"><div class="sec-title" style="color:var(--accent)"><i class="fas fa-check-double"></i> Verifikasi Hasil Analisis AI</div></div>
+        <p style="font-size:13px;color:var(--text2);margin-bottom:14px">AI berhasil menganalisis struk/teks Anda. Silakan verifikasi data di bawah sebelum disimpan ke database.</p>
+        
+        <div class="g2" style="margin-bottom:14px">
+          <div class="fg"><label class="fl">Nama Transaksi</label><input class="fi" id="aiResName"></div>
+          <div class="fg">
+            <label class="fl">Tipe</label>
+            <select class="fs" id="aiResType" onchange="adjustAIResCategories()">
+              <option value="expense">Pengeluaran</option>
+              <option value="income">Pemasukan</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="g3" style="margin-bottom:14px">
+          <div class="fg"><label class="fl">Jumlah (Rp)</label><input class="fi" id="aiResAmt" type="number"></div>
+          <div class="fg"><label class="fl">Tanggal</label><input class="fi" id="aiResDate" type="date"></div>
+          <div class="fg"><label class="fl">Kategori</label><select class="fs" id="aiResCat"></select></div>
+        </div>
+
+        <div class="fg" style="margin-bottom:16px"><label class="fl">Catatan</label><input class="fi" id="aiResNote"></div>
+
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-green btn-full" onclick="saveAIResult()"><i class="fas fa-save"></i> Ya, Simpan Transaksi</button>
+          <button class="btn btn-ghost" onclick="cancelAIResult()"><i class="fas fa-times"></i> Batalkan</button>
+        </div>
+      </div>
+    </div>
+
   </div>
 </main>
 </div>
@@ -571,8 +743,217 @@ const DEF={
 };
 
 let D=JSON.parse(JSON.stringify(DEF));
-function loadD(){try{const s=localStorage.getItem('dompet_v2');if(s)D=JSON.parse(s);}catch(e){}}
-function saveD(){try{localStorage.setItem('dompet_v2',JSON.stringify(D));}catch(e){}}
+function adjustDefaultDates() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const curMonthName = MONTHS[now.getMonth()];
+  
+  // Shift transactions
+  D.transactions.forEach(t => {
+    if (t.date.startsWith('2025-05')) {
+      t.date = t.date.replace('2025-05', `${y}-${m}`);
+      t.name = t.name.replace('Mei', curMonthName);
+    } else {
+      const parts = t.date.split('-');
+      if (parts.length === 3) {
+        t.date = `${y}-${m}-${parts[2]}`;
+      }
+    }
+  });
+
+  // Shift goals deadlines
+  D.goals.forEach(g => {
+    if (g.deadline) {
+      const parts = g.deadline.split('-');
+      if (parts.length === 2) {
+        const diffYear = parseInt(parts[0]) - 2025;
+        g.deadline = `${y + diffYear}-${parts[1]}`;
+      }
+    }
+  });
+}
+// ---- FIREBASE (Auth + Firestore) ----
+// GANTI nilai di bawah dengan config dari Firebase Console > Project settings > Your apps > Web app
+const firebaseConfig = {
+  apiKey: "AIzaSyAJ62qoz8Goqu32b0dMeYKOpnj7fcNNxmk",
+  authDomain: "budget-tracker-f6972.firebaseapp.com",
+  projectId: "budget-tracker-f6972",
+  storageBucket: "budget-tracker-f6972.firebasestorage.app",
+  messagingSenderId: "927274836290",
+  appId: "1:927274836290:web:1cd6c56e19833e2581e8db"
+};
+const FB_READY = typeof firebase !== 'undefined' && firebaseConfig.apiKey && !firebaseConfig.apiKey.startsWith('ISI_');
+let fbAuth = null, fbDb = null, curUser = null;
+let unsubData = null, saveTimer = null, dataLoaded = false, lastRev = '';
+const CLIENT_ID = Math.random().toString(36).slice(2, 10);
+if (FB_READY) { firebase.initializeApp(firebaseConfig); fbAuth = firebase.auth(); fbDb = firebase.firestore(); }
+
+function userDoc(){ return fbDb.collection('users').doc(curUser.uid); }
+
+function applyRemote(data){
+  try{
+    const p = JSON.parse(data.json);
+    if (p && p.transactions && p.budgets && p.goals) D = p;
+  }catch(e){ console.warn('Data cloud tidak valid', e); }
+}
+
+function writeCloud(){
+  clearTimeout(saveTimer); saveTimer = null;
+  if (!curUser || !dataLoaded) return Promise.resolve();
+  lastRev = CLIENT_ID + '-' + Date.now();
+  return userDoc().set({
+    json: JSON.stringify(D),
+    rev: lastRev,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  }).catch(e => toast('Gagal menyimpan ke cloud: ' + e.message, 'error'));
+}
+
+// Dipanggil di banyak tempat setelah data berubah; simpan ke Firestore dengan jeda singkat
+function saveD(){
+  if (!curUser || !dataLoaded) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(writeCloud, 600);
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden && saveTimer) writeCloud(); });
+
+async function startCloudSync(user){
+  curUser = user; dataLoaded = false;
+  document.getElementById('authBox').style.display = 'none';
+  document.getElementById('authLoading').style.display = 'block';
+  document.getElementById('authLoadingText').textContent = 'Memuat data...';
+  document.getElementById('userEmail').textContent = user.email || '';
+  try{
+    const snap = await userDoc().get();
+    if (snap.exists){
+      applyRemote(snap.data());
+      lastRev = snap.data().rev || '';
+      dataLoaded = true;
+    } else {
+      // Akun baru: pakai data lama di perangkat ini (jika ada), kalau tidak pakai data contoh
+      let migrated = false;
+      try{ const s = localStorage.getItem('dompet_v2'); if (s){ D = JSON.parse(s); migrated = true; } }catch(e){}
+      if (!migrated){ D = JSON.parse(JSON.stringify(DEF)); adjustDefaultDates(); }
+      dataLoaded = true;
+      await writeCloud();
+      if (migrated) toast('Data lama di perangkat ini sudah diunggah ke akunmu.', 'success', 4500);
+    }
+  }catch(e){
+    dataLoaded = false;
+    document.getElementById('authLoading').style.display = 'none';
+    document.getElementById('authBox').style.display = 'block';
+    showAuthErr('Gagal memuat data dari cloud: ' + (e.message || e) + '. Periksa koneksi internet lalu coba lagi.');
+    fbAuth.signOut();
+    return;
+  }
+  document.getElementById('authOv').classList.add('hidden');
+  navigate(curPage); updateMonthLabel(); renderPage(curPage);
+  // Sinkron realtime antar perangkat
+  if (unsubData) unsubData();
+  unsubData = userDoc().onSnapshot(s => {
+    if (!s.exists || s.metadata.hasPendingWrites) return;
+    const d = s.data();
+    if (d.rev === lastRev) return;
+    lastRev = d.rev;
+    applyRemote(d); renderPage(curPage);
+    toast('Data diperbarui dari perangkat lain.', 'info');
+  });
+}
+
+function initAuth(){
+  if (!FB_READY){
+    document.getElementById('authLoading').style.display = 'none';
+    document.getElementById('authBox').style.display = 'block';
+    showAuthErr('Firebase belum dikonfigurasi. Isi firebaseConfig di dalam file index.html terlebih dahulu.');
+    document.getElementById('authSubmit').disabled = true;
+    return;
+  }
+  fbAuth.onAuthStateChanged(user => {
+    if (user){ startCloudSync(user); }
+    else {
+      if (unsubData){ unsubData(); unsubData = null; }
+      curUser = null; dataLoaded = false;
+      D = JSON.parse(JSON.stringify(DEF)); // kosongkan data dari memori
+      document.getElementById('authLoading').style.display = 'none';
+      document.getElementById('authBox').style.display = 'block';
+      document.getElementById('authOv').classList.remove('hidden');
+      document.getElementById('authPass').value = '';
+      document.getElementById('authPass2').value = '';
+      setAuthMode('login');
+    }
+  });
+}
+
+// ---- AUTH UI ----
+let authMode = 'login';
+function setAuthMode(m){
+  authMode = m; hideAuthErr();
+  const reg = m === 'register';
+  document.getElementById('tabLogin').classList.toggle('active', !reg);
+  document.getElementById('tabRegister').classList.toggle('active', reg);
+  document.getElementById('authTitle').textContent = reg ? 'Buat akun baru' : 'Masuk ke akunmu';
+  document.getElementById('authSubmit').textContent = reg ? 'Daftar' : 'Masuk';
+  document.getElementById('authPass2Wrap').style.display = reg ? 'block' : 'none';
+  document.getElementById('authForgot').style.display = reg ? 'none' : 'block';
+  document.getElementById('authPass').autocomplete = reg ? 'new-password' : 'current-password';
+}
+function togglePw(){
+  const i = document.getElementById('authPass'), e = document.getElementById('pwEye');
+  const show = i.type === 'password';
+  i.type = show ? 'text' : 'password';
+  e.className = 'fas ' + (show ? 'fa-eye-slash' : 'fa-eye') + ' pw-eye';
+}
+function showAuthErr(msg){ const el = document.getElementById('authErr'); el.textContent = msg; el.classList.add('show'); }
+function hideAuthErr(){ document.getElementById('authErr').classList.remove('show'); }
+function authMsg(e){
+  const map = {
+    'auth/invalid-email': 'Format email tidak valid.',
+    'auth/invalid-credential': 'Email atau kata sandi salah.',
+    'auth/wrong-password': 'Email atau kata sandi salah.',
+    'auth/user-not-found': 'Email atau kata sandi salah.',
+    'auth/email-already-in-use': 'Email ini sudah terdaftar. Silakan masuk.',
+    'auth/weak-password': 'Kata sandi terlalu lemah. Gunakan minimal 6 karakter.',
+    'auth/too-many-requests': 'Terlalu banyak percobaan. Tunggu beberapa menit lalu coba lagi.',
+    'auth/network-request-failed': 'Tidak ada koneksi internet.',
+    'auth/missing-password': 'Kata sandi wajib diisi.'
+  };
+  return map[e.code] || ('Terjadi kesalahan: ' + (e.message || e.code));
+}
+async function submitAuth(){
+  if (!FB_READY) return;
+  hideAuthErr();
+  const email = document.getElementById('authEmail').value.trim();
+  const pass = document.getElementById('authPass').value;
+  if (!email){ showAuthErr('Email wajib diisi.'); return; }
+  if (!pass){ showAuthErr('Kata sandi wajib diisi.'); return; }
+  if (authMode === 'register'){
+    if (pass.length < 6){ showAuthErr('Kata sandi minimal 6 karakter.'); return; }
+    if (pass !== document.getElementById('authPass2').value){ showAuthErr('Kata sandi dan ulangannya tidak sama.'); return; }
+  }
+  const btn = document.getElementById('authSubmit'), label = btn.textContent;
+  btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Memproses...';
+  try{
+    if (authMode === 'register') await fbAuth.createUserWithEmailAndPassword(email, pass);
+    else await fbAuth.signInWithEmailAndPassword(email, pass);
+  }catch(e){ showAuthErr(authMsg(e)); }
+  btn.disabled = false; btn.textContent = label;
+}
+async function resetPassword(){
+  hideAuthErr();
+  const email = document.getElementById('authEmail').value.trim();
+  if (!email){ showAuthErr('Isi email dulu, lalu tap "Lupa kata sandi?".'); return; }
+  try{ await fbAuth.sendPasswordResetEmail(email); toast('Tautan reset kata sandi dikirim ke ' + email, 'success', 5000); }
+  catch(e){ showAuthErr(authMsg(e)); }
+}
+function logout(){
+  showConfirm('Keluar', 'Kamu akan keluar dari akun ini. Data tetap aman di cloud.', async () => {
+    await writeCloud();
+    fbAuth.signOut();
+  }, 'Ya, Keluar', 'btn-primary');
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !document.getElementById('authOv').classList.contains('hidden') && document.getElementById('authBox').style.display !== 'none') submitAuth();
+});
 
 const fmt=v=>'Rp'+Math.round(v).toLocaleString('id-ID');
 const fmtK=v=>v>=1e9?'Rp'+(v/1e9).toFixed(1)+'M':v>=1e6?'Rp'+(v/1e6).toFixed(1)+'jt':v>=1e3?'Rp'+(v/1e3).toFixed(0)+'rb':'Rp'+Math.round(v);
@@ -615,13 +996,18 @@ function navigate(page){
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('page-'+page).classList.add('active');
   const nav=document.getElementById('nav-'+page);if(nav)nav.classList.add('active');
-  const titles={dashboard:'Dashboard',income:'Pemasukan',expense:'Pengeluaran',budget:'Budget Planner',goals:'Saving Goals',analytics:'Analytics',data:'Kelola Data'};
+  const titles={dashboard:'Dashboard',income:'Pemasukan',expense:'Pengeluaran',budget:'Budget Planner',goals:'Saving Goals',analytics:'Analytics',data:'Kelola Data',ai:'Asisten AI'};
   document.getElementById('pageTitle').textContent=titles[page]||page;
   const btn=document.getElementById('mainAddBtn');
-  if(page==='goals'){btn.innerHTML='<i class="fas fa-plus"></i> Goal Baru';btn.onclick=openGoalModal;}
-  else if(page==='budget'){btn.innerHTML='<i class="fas fa-plus"></i> Set Budget';btn.onclick=openBudgetModal;}
-  else if(page==='data'){btn.innerHTML='<i class="fas fa-download"></i> Ekspor';btn.onclick=exportData;}
-  else{btn.innerHTML='<i class="fas fa-plus"></i> Tambah';btn.onclick=openAddModal;}
+  if(page==='ai'){
+    btn.style.display='none';
+  } else {
+    btn.style.display='inline-flex';
+    if(page==='goals'){btn.innerHTML='<i class="fas fa-plus"></i> Goal Baru';btn.onclick=openGoalModal;}
+    else if(page==='budget'){btn.innerHTML='<i class="fas fa-plus"></i> Set Budget';btn.onclick=openBudgetModal;}
+    else if(page==='data'){btn.innerHTML='<i class="fas fa-download"></i> Ekspor';btn.onclick=exportData;}
+    else{btn.innerHTML='<i class="fas fa-plus"></i> Tambah';btn.onclick=openAddModal;}
+  }
   // close sidebar on mobile
   if(window.innerWidth<768)document.getElementById('sidebar').classList.remove('open');
   renderPage(page);
@@ -629,6 +1015,8 @@ function navigate(page){
 
 function renderPage(p){
   updateMonthLabel();
+  // Ensure camera is stopped if navigating away from AI
+  if(p!=='ai') { stopCamera(); }
   if(p==='dashboard')renderDashboard();
   else if(p==='income')renderIncome();
   else if(p==='expense')renderExpense();
@@ -636,6 +1024,7 @@ function renderPage(p){
   else if(p==='goals')renderGoals();
   else if(p==='analytics')renderAnalytics();
   else if(p==='data')renderData();
+  else if(p==='ai')renderAIPage();
 }
 
 // ---- DASHBOARD ----
@@ -713,10 +1102,13 @@ function renderBarChart(tI,tE){
   for(let i=5;i>=0;i--){let m=curMonth-i;while(m<0)m+=12;labels.push(MONTHS[m].slice(0,3));}
   const incData=getMonthSums('income');
   const expData=getMonthSums('expense');
+  const isDark=document.documentElement.getAttribute('data-theme')==='dark';
+  const tickColor=isDark?'#8896B0':'#64748B';
+  const gridColor=isDark?'rgba(255,255,255,.08)':'rgba(0,0,0,.05)';
   charts.bar=new Chart(ctx,{type:'bar',data:{labels,datasets:[
     {label:'Pemasukan',data:incData,backgroundColor:'#1A7A4A33',borderColor:'#1A7A4A',borderWidth:2,borderRadius:5},
     {label:'Pengeluaran',data:expData,backgroundColor:'#2D5BE333',borderColor:'#2D5BE3',borderWidth:2,borderRadius:5}
-  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:{font:{size:11}}},y:{grid:{color:'rgba(128,128,128,.1)'},ticks:{callback:v=>fmtK(v),font:{size:10}}}}}});
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:{color:tickColor,font:{size:11}}},y:{grid:{color:gridColor},ticks:{color:tickColor,callback:v=>fmtK(v),font:{size:10}}}}}});
 }
 
 function renderDonut(exp){
@@ -853,8 +1245,12 @@ function renderAnalytics(){
   const exp=getMonthTx('expense'),inc=getMonthTx('income');
   const byCat={};exp.forEach(t=>{byCat[t.cat]=(byCat[t.cat]||0)+t.amount});const sorted=Object.entries(byCat).sort((a,b)=>b[1]-a[1]);
   const tI=sum(inc),tE=sum(exp);
+  const isDark=document.documentElement.getAttribute('data-theme')==='dark';
+  const tickColor=isDark?'#8896B0':'#64748B';
+  const gridColor=isDark?'rgba(255,255,255,.08)':'rgba(0,0,0,.05)';
+  
   const ctx1=document.getElementById('topC').getContext('2d');if(charts.top){charts.top.destroy();}
-  charts.top=new Chart(ctx1,{type:'bar',data:{labels:sorted.map(s=>s[0]),datasets:[{data:sorted.map(s=>s[1]),backgroundColor:['#2D5BE3','#1A7A4A','#5B3EC4','#A0560A','#C0392B','#888780','#2D5BE3','#1A7A4A'].slice(0,sorted.length),borderRadius:5,borderSkipped:false}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'rgba(128,128,128,.1)'},ticks:{callback:v=>fmtK(v),font:{size:10}}},y:{grid:{display:false},ticks:{font:{size:11}}}}}});
+  charts.top=new Chart(ctx1,{type:'bar',data:{labels:sorted.map(s=>s[0]),datasets:[{data:sorted.map(s=>s[1]),backgroundColor:['#2D5BE3','#1A7A4A','#5B3EC4','#A0560A','#C0392B','#888780','#2D5BE3','#1A7A4A'].slice(0,sorted.length),borderRadius:5,borderSkipped:false}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:gridColor},ticks:{color:tickColor,callback:v=>fmtK(v),font:{size:10}}},y:{grid:{display:false},ticks:{color:tickColor,font:{size:11}}}}}});
 
   // REAL 6-month trend
   const ctx2=document.getElementById('trendC').getContext('2d');if(charts.trend){charts.trend.destroy();}
@@ -865,7 +1261,7 @@ function renderAnalytics(){
   charts.trend=new Chart(ctx2,{type:'line',data:{labels:tLabels,datasets:[
     {label:'Pemasukan',data:incData,borderColor:'#1A7A4A',backgroundColor:'#1A7A4A22',fill:true,tension:.4,pointRadius:3},
     {label:'Pengeluaran',data:expData,borderColor:'#2D5BE3',backgroundColor:'#2D5BE322',fill:true,tension:.4,pointRadius:3}
-  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:{font:{size:11}}},y:{grid:{color:'rgba(128,128,128,.1)'},ticks:{callback:v=>fmtK(v),font:{size:10}}}}}});
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:{color:tickColor,font:{size:11}}},y:{grid:{color:gridColor},ticks:{color:tickColor,callback:v=>fmtK(v),font:{size:10}}}}}});
 
   const top=sorted[0];
   document.getElementById('insightCards').innerHTML=`<div class="g2">
@@ -1112,8 +1508,12 @@ function copyQRText(){
   });
 }
 
+let importChunks = {};
+
 function openQRImport(){
+  importChunks = {};
   document.getElementById('qrPasteInput').value='';
+  document.getElementById('qrPasteInput').placeholder='Paste teks data di sini...';
   document.getElementById('qrImportModal').classList.add('open');
   setTimeout(()=>document.getElementById('qrPasteInput').focus(),200);
 }
@@ -1123,16 +1523,301 @@ function importFromPaste(){
   if(!raw){toast('Teks data kosong!','error');return;}
   try{
     let json=raw;
-    if(raw.startsWith('DOMPET:')){
+    const match = raw.match(/^\[(\d+)\/(\d+)\](.*)/s);
+    if(match){
+      const curr = parseInt(match[1]);
+      const total = parseInt(match[2]);
+      const chunkData = match[3];
+      importChunks[curr] = chunkData;
+      
+      const received = Object.keys(importChunks).length;
+      if(received < total){
+        toast(`Berhasil membaca bagian ${curr}/${total}. Silakan paste bagian berikutnya!`,'info');
+        document.getElementById('qrPasteInput').value = '';
+        document.getElementById('qrPasteInput').placeholder = `Paste bagian ${received + 1}/${total} di sini...`;
+        return;
+      }
+      
+      // All chunks received
+      let fullJson = '';
+      for(let i=1; i<=total; i++){
+        if(!importChunks[i]){
+          toast(`Menunggu bagian ${i} yang belum di-paste!`,'warning');
+          return;
+        }
+        fullJson += importChunks[i];
+      }
+      json = fullJson;
+      importChunks = {}; // reset
+    } else if(raw.startsWith('DOMPET:')){
       json=decodeURIComponent(escape(atob(raw.slice(7))));
     }
+    
     const parsed=JSON.parse(json);
     if(!parsed.transactions||!parsed.budgets||!parsed.goals){toast('Format data tidak valid!','error');return;}
     showConfirm('Import Data QR','Data yang ada akan diganti dengan data dari QR/teks ini. Lanjutkan?',()=>{
       D=parsed;saveD();closeAll();renderPage(curPage);
       toast('Data berhasil diimport dari QR!','success');
     },'Ya, Import','btn-primary');
-  }catch(e){toast('Gagal membaca data: '+e.message,'error');}
+  }catch(e){
+    toast('Gagal membaca data: '+e.message,'error');
+  }
+}
+
+// ---- ASISTEN AI ----
+let streamObj = null;
+let receiptBase64 = null;
+let receiptMime = null;
+
+function renderAIPage() {
+  // Clear any existing forms/previews on entering the page
+  document.getElementById('aiTextInput').value = '';
+  document.getElementById('aiResultCard').style.display = 'none';
+  resetReceiptImage();
+}
+
+function processAIText() {
+  const text = document.getElementById('aiTextInput').value.trim();
+  if (!text) {
+    toast('Kalimat input tidak boleh kosong!', 'warning');
+    return;
+  }
+
+  const btn = document.getElementById('aiTextBtn');
+  const originalHtml = btn.innerHTML;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Memproses dengan AI...';
+  btn.disabled = true;
+
+  const curDateStr = new Date().toISOString().split('T')[0];
+
+  fetch('/api/ai/parse-text', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, currentDate: curDateStr })
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data.success && data.transaction) {
+      showAIConfirmation(data.transaction);
+      toast('Kalimat berhasil dianalisis!', 'success');
+    } else {
+      toast('Gagal menganalisis kalimat: ' + (data.error || 'Server error'), 'error');
+    }
+  })
+  .catch(err => {
+    toast('Gagal menghubungi server AI: ' + err.message, 'error');
+  })
+  .finally(() => {
+    btn.innerHTML = originalHtml;
+    btn.disabled = false;
+  });
+}
+
+function startCamera() {
+  resetReceiptImage();
+  const container = document.getElementById('cameraContainer');
+  const video = document.getElementById('cameraVideo');
+  
+  document.getElementById('aiScanIcon').style.display = 'none';
+  document.getElementById('aiScanText').textContent = 'Posisikan struk dalam bingkai kamera...';
+  container.style.display = 'block';
+
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+    .then(stream => {
+      streamObj = stream;
+      video.srcObject = stream;
+    })
+    .catch(err => {
+      toast('Tidak bisa membuka kamera: ' + err.message, 'error');
+      stopCamera();
+    });
+}
+
+function stopCamera() {
+  if (streamObj) {
+    streamObj.getTracks().forEach(t => t.stop());
+    streamObj = null;
+  }
+  document.getElementById('cameraContainer').style.display = 'none';
+  document.getElementById('aiScanIcon').style.display = 'block';
+  document.getElementById('aiScanText').textContent = 'Ambil foto struk atau klik tombol di bawah';
+}
+
+function captureCamera() {
+  const video = document.getElementById('cameraVideo');
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth || 640;
+  canvas.height = video.videoHeight || 480;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  
+  const dataUrl = canvas.toDataURL('image/jpeg');
+  stopCamera();
+  
+  showReceiptPreview(dataUrl);
+}
+
+function processImageFile(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  
+  stopCamera();
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    showReceiptPreview(e.target.result);
+  };
+  reader.readAsDataURL(file);
+}
+
+function showReceiptPreview(dataUrl) {
+  receiptMime = dataUrl.split(';')[0].split(':')[1] || 'image/jpeg';
+  receiptBase64 = dataUrl.split(',')[1];
+  
+  document.getElementById('aiScanIcon').style.display = 'none';
+  document.getElementById('aiScanText').textContent = 'Pratinjau Struk:';
+  document.getElementById('receiptPreview').src = dataUrl;
+  document.getElementById('receiptPreviewContainer').style.display = 'block';
+}
+
+function resetReceiptImage() {
+  receiptBase64 = null;
+  receiptMime = null;
+  document.getElementById('receiptPreviewContainer').style.display = 'none';
+  document.getElementById('receiptPreview').src = '';
+  document.getElementById('aiScanIcon').style.display = 'block';
+  document.getElementById('aiScanText').textContent = 'Ambil foto struk atau klik tombol di bawah';
+  document.getElementById('aiImgFile').value = '';
+}
+
+function processAIReceipt() {
+  if (!receiptBase64) {
+    toast('Foto struk belum diambil/dipilih!', 'warning');
+    return;
+  }
+
+  const btn = document.getElementById('aiScanBtn');
+  const originalHtml = btn.innerHTML;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Menganalisis...';
+  btn.disabled = true;
+
+  const curDateStr = new Date().toISOString().split('T')[0];
+
+  fetch('/api/ai/parse-receipt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 
+      image: receiptBase64, 
+      mimeType: receiptMime,
+      currentDate: curDateStr 
+    })
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data.success && data.transaction) {
+      showAIConfirmation(data.transaction);
+      toast('Analisis struk selesai!', 'success');
+    } else {
+      toast('Gagal menganalisis struk: ' + (data.error || 'Server error'), 'error');
+    }
+  })
+  .catch(err => {
+    toast('Gagal menghubungi server AI: ' + err.message, 'error');
+  })
+  .finally(() => {
+    btn.innerHTML = originalHtml;
+    btn.disabled = false;
+  });
+}
+
+function showAIConfirmation(tx) {
+  const resultCard = document.getElementById('aiResultCard');
+  document.getElementById('aiResName').value = tx.name || '';
+  document.getElementById('aiResType').value = tx.type || 'expense';
+  document.getElementById('aiResAmt').value = tx.amount || 0;
+  
+  // Format date correctly for HTML input type=date (YYYY-MM-DD)
+  let dateVal = tx.date;
+  if (!dateVal || !/^\d{4}-\d{2}-\d{2}$/.test(dateVal)) {
+    dateVal = new Date().toISOString().split('T')[0];
+  }
+  document.getElementById('aiResDate').value = dateVal;
+  document.getElementById('aiResNote').value = tx.note || '';
+
+  // Load and adjust categories
+  adjustAIResCategories(tx.cat);
+  
+  resultCard.style.display = 'block';
+  resultCard.scrollIntoView({ behavior: 'smooth' });
+}
+
+function adjustAIResCategories(selectedCat = null) {
+  const type = document.getElementById('aiResType').value;
+  const catSelect = document.getElementById('aiResCat');
+  const categories = (type === 'income' ? CAT_INC : CAT_EXP);
+  
+  catSelect.innerHTML = categories.map(c => `<option value="${c}">${c}</option>`).join('');
+  
+  if (selectedCat && categories.includes(selectedCat)) {
+    catSelect.value = selectedCat;
+  } else {
+    catSelect.selectedIndex = 0;
+  }
+}
+
+function saveAIResult() {
+  const name = document.getElementById('aiResName').value.trim();
+  const type = document.getElementById('aiResType').value;
+  const amt = parseFloat(document.getElementById('aiResAmt').value);
+  const date = document.getElementById('aiResDate').value;
+  const cat = document.getElementById('aiResCat').value;
+  const note = document.getElementById('aiResNote').value.trim();
+
+  if (!name) {
+    toast('Nama transaksi wajib diisi!', 'error');
+    return;
+  }
+  if (!amt || amt <= 0) {
+    toast('Jumlah harus lebih dari 0!', 'error');
+    return;
+  }
+  if (!date) {
+    toast('Tanggal wajib diisi!', 'error');
+    return;
+  }
+
+  // Save transaction to local state
+  const newTx = {
+    id: Date.now(),
+    type,
+    name,
+    amount: amt,
+    cat,
+    date,
+    note
+  };
+
+  D.transactions.push(newTx);
+  saveD();
+
+  // Switch calendar view to matched transaction month if it's different
+  const d = new Date(date + 'T00:00:00');
+  curMonth = d.getMonth();
+  curYear = d.getFullYear();
+  updateMonthLabel();
+
+  toast('Transaksi AI berhasil disimpan!', 'success');
+  
+  // Clear and hide confirmation
+  cancelAIResult();
+  
+  // Navigate to dashboard so user can see it instantly!
+  navigate('dashboard');
+}
+
+function cancelAIResult() {
+  document.getElementById('aiResultCard').style.display = 'none';
+  document.getElementById('aiTextInput').value = '';
+  resetReceiptImage();
 }
 
 // PWA Service Worker Registration
@@ -1148,8 +1833,7 @@ if('serviceWorker' in navigator){
 const now=new Date();curMonth=now.getMonth();curYear=now.getFullYear();
 const savedTheme=localStorage.getItem('dompet_theme');
 if(savedTheme){document.documentElement.setAttribute('data-theme',savedTheme);document.getElementById('themeIco').className=savedTheme==='dark'?'fas fa-sun':'fas fa-moon';}
-loadD();
-renderDashboard();
 updateMonthLabel();
+initAuth();
 </script>
 </html>
